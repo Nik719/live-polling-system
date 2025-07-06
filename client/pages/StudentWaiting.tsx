@@ -7,14 +7,38 @@ import { useSocket } from "@/contexts/SocketContext";
 export default function StudentWaiting() {
   const navigate = useNavigate();
   const [isChatOpen, setIsChatOpen] = useState(false);
-  const { activePoll, isConnected } = useSocket();
+  const { isConnected, activePoll, userType, userName, joinRoom } = useSocket();
 
-  // Redirect to answer page when a new poll is created
+  // Auto-join as student when component mounts
+  useEffect(() => {
+    const studentName = sessionStorage.getItem("studentName");
+    if (!userName && studentName) {
+      joinRoom(studentName, "student");
+    }
+  }, [userName, joinRoom]);
+
+  // Listen for new polls from Socket.IO
   useEffect(() => {
     if (activePoll && activePoll.isActive) {
+      // Navigate to answer page when a new poll is received
       navigate("/student-answer");
     }
   }, [activePoll, navigate]);
+
+  // Fallback: Check sessionStorage for development mode
+  useEffect(() => {
+    if (!isConnected) {
+      const checkForPoll = () => {
+        const currentPoll = sessionStorage.getItem("currentPoll");
+        if (currentPoll) {
+          navigate("/student-answer");
+        }
+      };
+
+      const interval = setInterval(checkForPoll, 2000);
+      return () => clearInterval(interval);
+    }
+  }, [navigate, isConnected]);
 
   return (
     <div className="min-h-screen bg-gradient-to-br from-slate-50 to-slate-100 flex items-center justify-center p-4">
@@ -29,11 +53,11 @@ export default function StudentWaiting() {
         <div className="flex items-center justify-center gap-2 text-sm">
           <div
             className={`w-2 h-2 rounded-full ${
-              isConnected ? "bg-green-500" : "bg-red-500"
+              isConnected ? "bg-green-500" : "bg-yellow-500"
             }`}
           ></div>
           <span className="text-gray-600">
-            {isConnected ? "Connected to server" : "Connecting..."}
+            {isConnected ? "Connected to teacher" : "Development mode"}
           </span>
         </div>
 
@@ -43,9 +67,19 @@ export default function StudentWaiting() {
         </div>
 
         {/* Main Text */}
-        <h1 className="text-4xl md:text-5xl font-bold text-gray-900">
-          Wait for the teacher to ask questions..
-        </h1>
+        <div className="space-y-4">
+          <h1 className="text-4xl md:text-5xl font-bold text-gray-900">
+            Wait for the teacher to ask questions..
+          </h1>
+          <p className="text-gray-600">
+            You will be automatically redirected when a new poll starts
+          </p>
+        </div>
+
+        {/* Debug Info */}
+        <div className="text-xs text-gray-400 mt-8">
+          Student: {sessionStorage.getItem("studentName") || "Unknown"}
+        </div>
 
         {/* Chat Button */}
         <div className="fixed bottom-8 right-8">

@@ -2,31 +2,35 @@
   "version": 2,
   "builds": [
     {
-      "src": "api/socket/[[...path]].ts",
-      "use": "@vercel/node"
-    },
-    {
       "src": "dist/spa/**",
       "use": "@vercel/static"
+    },
+    {
+      "src": "api/socket.ts",
+      "use": "@vercel/node"
     },
     {
       "src": "dist/server/node-build.mjs",
       "use": "@vercel/node"
     }
   ],
+  "functions": {
+    "api/socket.ts": {
+      "includeFiles": ["dist/server/**"]
+    }
+  },
   "routes": [
     {
       "src": "/socket.io/(.*)",
-      "dest": "/api/socket/[[...path]].ts",
+      "dest": "/dist/server/node-build.mjs",
       "headers": {
         "Connection": "upgrade",
         "Upgrade": "websocket"
-      },
-      "continue": true
+      }
     },
     {
-      "src": "/api/(?<path>.*)",
-      "dest": "/api/socket/[[...path]].ts"
+      "src": "/api/(.*)",
+      "dest": "/dist/server/node-build.mjs"
     },
     {
       "src": "/(.*)",
@@ -35,21 +39,5 @@
   ],
   "env": {
     "NODE_ENV": "production"
-  },
-  "functions": {
-    "api/socket/[[...path]].ts": {
-      "memory": 1024,
-      "maxDuration": 60,
-      "includeFiles": [
-        "dist/server/**"
-      ]
-    }
-  },
-  "regions": ["iad1"],
-  "rewrites": [
-    {
-      "source": "/socket.io/:path*",
-      "destination": "/api/socket/:path*"
-    }
-  ]
+  }
 }

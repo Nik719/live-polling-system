@@ -5,70 +5,62 @@ import { Server as SocketIOServer } from "socket.io";
 import { handleDemo } from "./routes/demo";
 import { initializeSocket } from "./socket";
 
+// Increase the HTTP server timeout for WebSocket connections
+const KEEP_ALIVE_TIMEOUT = 120000; // 2 minutes
+
 export function createApp() {
   const app = express();
   const httpServer = createServer(app);
-
-  // CORS configuration
-  const corsOptions = {
-    origin: (origin: string | undefined, callback: (err: Error | null, allow?: boolean) => void) => {
-      const allowedOrigins = [
-        'https://live-polling-system.vercel.app',
-        'https://live-polling-system-*.vercel.app',
-        'http://localhost:8080',
-        'http://localhost:3000',
-        'http://localhost:3001'
-      ];
-      
-      if (!origin || allowedOrigins.some(allowed => 
-        origin === allowed || 
-        origin.endsWith('.vercel.app') ||
-        (process.env.NODE_ENV !== 'production' && origin.startsWith('http://localhost'))
-      )) {
-        callback(null, true);
-      } else {
-        console.log('Blocked CORS for origin:', origin);
-        callback(new Error('Not allowed by CORS'));
-      }
-    },
-    methods: ['GET', 'POST', 'OPTIONS'],
-    allowedHeaders: ['Content-Type', 'Authorization'],
-    credentials: true
-  };
-
-  // Initialize Socket.IO with CORS
-  const io = new SocketIOServer(httpServer, {
-    cors: corsOptions,
-    transports: ['websocket', 'polling'],
-    allowEIO3: true,
-    pingTimeout: 60000,
-    pingInterval: 25000,
-    cookie: false
-  });
   
-  // Handle WebSocket connection errors
-  io.engine.on('connection_error', (err) => {
-    console.error('WebSocket connection error:', err);
+  // Configure server timeouts for WebSocket support
+  httpServer.keepAliveTimeout = KEEP_ALIVE_TIMEOUT;
+  httpServer.headersTimeout = KEEP_ALIVE_TIMEOUT + 1000;
+
+  // Initialize Socket.IO with flexible CORS settings
+  const io = new SocketIOServer(httpServer, {
+    cors: {
+      // Allow all origins in development, check origin in production
+      origin: (origin, callback) => {
+        // In development, allow all origins for easier testing
+        if (process.env.NODE_ENV !== 'production') {
+          return callback(null, true);
+        }
+        
+        // In production, check against the request origin
+        if (!origin || origin.endsWith('.vercel.app') || origin.includes('localhost')) {
+          return callback(null, true);
+        }
+        
+        // Reject all other origins
+        callback(new Error('Not allowed by CORS'));
+      },
+      methods: ["GET", "POST", "OPTIONS"],
+      credentials: true,
+      allowedHeaders: ["Content-Type", "Authorization"]
+    },
+    // Enable both WebSocket and HTTP long-polling
+    transports: ["websocket", "polling"],
+    // Use the standard Socket.IO path
+    path: "/socket.io/",
+    // Don't serve the client files (they're served by Vite)
+    serveClient: false
   });
 
   // Initialize polling system
   const pollManager = initializeSocket(io);
 
-  // Apply CORS middleware for HTTP requests
-  app.use(cors(corsOptions));
-  
-  // Handle preflight requests
-  app.options('*', cors(corsOptions));
-  
-  // Body parsing middleware
+  // Middleware
+  app.use(
+    cors({
+      origin:
+        process.env.NODE_ENV === "production"
+          ? ["https://*.vercel.app", "https://localhost:3000"]
+          : ["http://localhost:8080", "http://localhost:3000"],
+      credentials: true,
+    }),
+  );
   app.use(express.json());
   app.use(express.urlencoded({ extended: true }));
-  
-  // Log all incoming requests
-  app.use((req, res, next) => {
-    console.log(`[${new Date().toISOString()}] ${req.method} ${req.path}`);
-    next();
-  });
 
   // API Routes
   app.get("/api/ping", (_req, res) => {

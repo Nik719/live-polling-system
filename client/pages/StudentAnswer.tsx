@@ -12,17 +12,41 @@ export default function StudentAnswer() {
   const [selectedAnswer, setSelectedAnswer] = useState("");
   const [timeLeft, setTimeLeft] = useState(60);
   const [isChatOpen, setIsChatOpen] = useState(false);
-  const { activePoll, submitAnswer, results } = useSocket();
+  const {
+    isConnected,
+    activePoll,
+    userType,
+    userName,
+    joinRoom,
+    submitAnswer,
+  } = useSocket();
 
-  // Set initial timer based on poll duration
+  // Auto-join as student when component mounts
   useEffect(() => {
-    if (activePoll && activePoll.endTime) {
-      const endTime = new Date(activePoll.endTime).getTime();
-      const now = Date.now();
-      const remainingTime = Math.max(0, Math.floor((endTime - now) / 1000));
-      setTimeLeft(remainingTime);
+    const studentName = sessionStorage.getItem("studentName");
+    if (!userName && studentName) {
+      joinRoom(studentName, "student");
     }
-  }, [activePoll]);
+  }, [userName, joinRoom]);
+
+  // Load poll data from Socket.IO or sessionStorage fallback
+  useEffect(() => {
+    if (activePoll && activePoll.isActive) {
+      setTimeLeft(activePoll.duration);
+    } else if (!isConnected) {
+      // Fallback to sessionStorage for development
+      const pollData = sessionStorage.getItem("currentPoll");
+      if (pollData) {
+        const poll = JSON.parse(pollData);
+        setTimeLeft(parseInt(poll.duration) || 60);
+      } else {
+        navigate("/student-waiting");
+      }
+    } else if (!activePoll) {
+      // No active poll, redirect back to waiting
+      navigate("/student-waiting");
+    }
+  }, [activePoll, navigate, isConnected]);
 
   // Timer countdown
   useEffect(() => {
@@ -31,26 +55,29 @@ export default function StudentAnswer() {
       return () => clearTimeout(timer);
     } else {
       // Auto-submit when time runs out
-      navigate("/student-results");
+      handleSubmit(true);
     }
-  }, [timeLeft, navigate]);
+  }, [timeLeft]);
 
-  // Redirect to results when poll ends or answer is submitted
-  useEffect(() => {
-    if (activePoll && !activePoll.isActive) {
-      navigate("/student-results");
-    }
-  }, [activePoll, navigate]);
-
-  const handleSubmit = () => {
-    if (selectedAnswer && activePoll) {
-      const option = activePoll.options.find(
-        (opt) => opt.text === selectedAnswer,
-      );
-      if (option) {
-        submitAnswer(option.id);
-        navigate("/student-results");
+  const handleSubmit = (autoSubmit = false) => {
+    if (selectedAnswer || autoSubmit) {
+      if (isConnected && activePoll) {
+        // Use Socket.IO for real-time answer submission
+        submitAnswer(selectedAnswer);
+      } else {
+        // Fallback: Store answer in sessionStorage for development
+        const pollData = sessionStorage.getItem("currentPoll");
+        const poll = pollData ? JSON.parse(pollData) : null;
+        const answerData = {
+          question: poll?.question || activePoll?.question,
+          selectedAnswer,
+          submittedAt: new Date().toISOString(),
+          timeRemaining: timeLeft,
+          autoSubmitted: autoSubmit,
+        };
+        sessionStorage.setItem("studentAnswer", JSON.stringify(answerData));
       }
+      navigate("/student-results");
     }
   };
 
@@ -60,7 +87,15 @@ export default function StudentAnswer() {
     return `${mins.toString().padStart(2, "0")}:${secs.toString().padStart(2, "0")}`;
   };
 
-  if (!activePoll) {
+  // Get poll data from Socket.IO or sessionStorage fallback
+  const pollData =
+    activePoll ||
+    (() => {
+      const sessionPoll = sessionStorage.getItem("currentPoll");
+      return sessionPoll ? JSON.parse(sessionPoll) : null;
+    })();
+
+  if (!pollData) {
     return (
       <div className="min-h-screen bg-gradient-to-br from-slate-50 to-slate-100 flex items-center justify-center p-4">
         <div className="text-center">
@@ -101,7 +136,7 @@ export default function StudentAnswer() {
           <CardContent className="p-0">
             {/* Question Header */}
             <div className="bg-gray-700 text-white p-4 font-medium">
-              {activePoll.question}
+              {pollData.question}
             </div>
 
             {/* Options */}
@@ -111,7 +146,7 @@ export default function StudentAnswer() {
                 onValueChange={setSelectedAnswer}
               >
                 <div className="space-y-3">
-                  {activePoll.options.map((option, index) => (
+                  {pollData.options.map((option: any, index: number) => (
                     <div
                       key={option.id}
                       className="flex items-center space-x-3"
@@ -139,12 +174,23 @@ export default function StudentAnswer() {
         {/* Submit Button */}
         <div className="flex justify-end">
           <Button
-            onClick={handleSubmit}
+            onClick={() => handleSubmit(false)}
             disabled={!selectedAnswer}
             size="lg"
             className="px-8 py-3 text-lg font-medium rounded-full"
           >
-            Submit
+            Submit Answer
+          </Button>
+        </div>
+
+        {/* Navigation Helper */}
+        <div className="text-center">
+          <Button
+            variant="outline"
+            onClick={() => navigate("/student-waiting")}
+            className="text-sm"
+          >
+            Back to Waiting Room
           </Button>
         </div>
 

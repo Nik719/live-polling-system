@@ -15,6 +15,7 @@ import StudentAnswer from "./pages/StudentAnswer";
 import StudentResults from "./pages/StudentResults";
 import StudentKicked from "./pages/StudentKicked";
 import TeacherLive from "./pages/TeacherLive";
+import TeacherSetup from "./pages/TeacherSetup";
 import PollHistory from "./pages/PollHistory";
 import NotFound from "./pages/NotFound";
 
@@ -35,6 +36,7 @@ const App = () => (
             <Route path="/student-answer" element={<StudentAnswer />} />
             <Route path="/student-results" element={<StudentResults />} />
             <Route path="/student-kicked" element={<StudentKicked />} />
+            <Route path="/teacher-setup" element={<TeacherSetup />} />
             <Route path="/teacher-live" element={<TeacherLive />} />
             <Route path="/poll-history" element={<PollHistory />} />
             {/* ADD ALL CUSTOM ROUTES ABOVE THE CATCH-ALL "*" ROUTE */}

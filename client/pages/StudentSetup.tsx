@@ -2,17 +2,28 @@ import { useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import { useSocket } from "@/contexts/SocketContext";
 
 export default function StudentSetup() {
   const navigate = useNavigate();
+  const { joinRoom } = useSocket();
   const [name, setName] = useState(
-    sessionStorage.getItem("studentName") || "Nik",
+    sessionStorage.getItem("studentName") || "",
+  );
+  const [roomId, setRoomId] = useState(
+    sessionStorage.getItem("roomId") || "default-room",
   );
 
   const handleContinue = () => {
     if (name.trim()) {
-      // Store name in sessionStorage for persistence on refresh
+      // Store name and room ID in sessionStorage for persistence on refresh
       sessionStorage.setItem("studentName", name);
+      sessionStorage.setItem("roomId", roomId);
+      
+      // Join the room
+      joinRoom(name, "student", roomId);
+      
+      // Navigate to waiting room
       navigate("/student-waiting");
     }
   };
@@ -45,8 +56,14 @@ export default function StudentSetup() {
             <Input
               value={name}
               onChange={(e) => setName(e.target.value)}
-              className="h-14 text-lg bg-gray-100 border-0 focus-visible:ring-2 focus-visible:ring-primary"
+              className="h-14 text-lg bg-gray-100 border-0 focus-visible:ring-2 focus-visible:ring-primary mb-4"
               placeholder="Your name"
+            />
+            <Input
+              value={roomId}
+              onChange={(e) => setRoomId(e.target.value)}
+              className="h-14 text-lg bg-gray-100 border-0 focus-visible:ring-2 focus-visible:ring-primary"
+              placeholder="Room ID (default: default-room)"
             />
           </div>
 

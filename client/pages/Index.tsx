@@ -11,7 +11,7 @@ export default function Index() {
 
   const handleContinue = () => {
     if (selectedRole === "teacher") {
-      navigate("/create-poll");
+      navigate("/teacher-setup");
     } else if (selectedRole === "student") {
       navigate("/student-setup");
     }

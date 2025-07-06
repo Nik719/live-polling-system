@@ -1,5 +1,6 @@
 import React, { createContext, useContext, useEffect, useState } from "react";
 import { io, Socket } from "socket.io-client";
+import { toast } from "sonner";
 
 interface Participant {
   id: string;
@@ -30,6 +31,7 @@ interface ChatMessage {
   text: string;
   timestamp: string;
   isTeacher: boolean;
+  roomId: string;
 }
 
 interface SocketContextType {
@@ -38,12 +40,13 @@ interface SocketContextType {
   userId: string | null;
   userName: string | null;
   userType: "teacher" | "student" | null;
+  roomId: string | null;
   participants: Participant[];
   activePoll: Poll | null;
   chatMessages: ChatMessage[];
   pollHistory: Poll[];
   results: Record<string, number>;
-  joinRoom: (userName: string, userType: "teacher" | "student") => void;
+  joinRoom: (userName: string, userType: "teacher" | "student", roomId: string) => void;
   createPoll: (pollData: {
     question: string;
     options: Array<{ id: string; text: string; isCorrect: boolean }>;
@@ -81,77 +84,58 @@ export const SocketProvider: React.FC<SocketProviderProps> = ({ children }) => {
   const [chatMessages, setChatMessages] = useState<ChatMessage[]>([]);
   const [pollHistory, setPollHistory] = useState<Poll[]>([]);
   const [results, setResults] = useState<Record<string, number>>({});
+  const [roomId, setRoomId] = useState<string | null>(null);
 
   useEffect(() => {
-    // Initialize socket connection with Vercel-specific configuration
+    // Initialize socket connection with relative URL
     const socketInstance = io({
       path: "/socket.io/",
+      // Use relative URL for both development and production
+      hostname: window.location.hostname,
+      // Auto-detect secure connection
+      secure: window.location.protocol === 'https:',
+      // Auto-detect port
+      port: window.location.port ? parseInt(window.location.port) : 
+           (window.location.protocol === 'https:' ? 443 : 80),
+      // Enable both transports with websocket as primary
       transports: ["websocket", "polling"],
+      // Enable auto-upgrade
       upgrade: true,
+      // Auto-connect
       autoConnect: true,
-      withCredentials: true,
+      // Timeout settings
+      timeout: 30000,
+      // Reconnection settings
       reconnection: true,
       reconnectionAttempts: 10,
       reconnectionDelay: 1000,
       reconnectionDelayMax: 10000,
-      timeout: 20000,
-      // Vercel-specific configuration
-      ...(process.env.NODE_ENV === 'production' ? {
-        hostname: window.location.hostname,
-        secure: true,
-        port: '',
-        rejectUnauthorized: false,
-        // Force WebSocket transport in production
-        transports: ['websocket'],
-        // Enable multiplexing
-        forceNew: true,
-        // Add query parameters for debugging
-        query: {
-          v: '1.0',
-          t: Date.now()
-        }
-      } : {
-        // Development configuration
-        hostname: 'localhost',
-        port: '8080',
-        secure: false
-      })
+      // Important: Enable websocket transport first
+      withCredentials: true,
+      // Add debug logging in development
+      ...(process.env.NODE_ENV === 'development' && { debug: true })
     });
-    
-    // Log connection status
-    const handleConnect = () => {
-      console.log('WebSocket connected:', socketInstance.id);
-      setIsConnected(true);
-    };
-    
-    const handleDisconnect = () => {
-      console.log('WebSocket disconnected');
-      setIsConnected(false);
-    };
-    
-    const handleConnectError = (error: Error) => {
-      console.error('WebSocket connection error:', error);
-      setIsConnected(false);
-    };
-    
-    // Set up event listeners
-    socketInstance.on('connect', handleConnect);
-    socketInstance.on('disconnect', handleDisconnect);
-    socketInstance.on('connect_error', handleConnectError);
-    
-    // Clean up event listeners on unmount
-    return () => {
-      socketInstance.off('connect', handleConnect);
-      socketInstance.off('disconnect', handleDisconnect);
-      socketInstance.off('connect_error', handleConnectError);
-      socketInstance.disconnect();
-    };
 
     setSocket(socketInstance);
 
     socketInstance.on("connect", () => {
+      console.log("Connected to server with ID:", socketInstance.id);
       setIsConnected(true);
-      console.log("Connected to server");
+      setUserId(socketInstance.id);
+      
+      // Try to reconnect with stored session data if available
+      const storedUserName = sessionStorage.getItem('userName');
+      const storedUserType = sessionStorage.getItem('userType') as "teacher" | "student" | null;
+      const storedRoomId = sessionStorage.getItem('roomId');
+      
+      console.log('Stored session data:', { storedUserName, storedUserType, storedRoomId });
+      
+      if (storedUserName && storedUserType && storedRoomId) {
+        console.log('Attempting to rejoin room with stored data...');
+        joinRoom(storedUserName, storedUserType, storedRoomId);
+      } else {
+        console.log('No stored session data found for auto-rejoin');
+      }
     });
 
     socketInstance.on("disconnect", () => {
@@ -162,7 +146,22 @@ export const SocketProvider: React.FC<SocketProviderProps> = ({ children }) => {
     socketInstance.on("connect_error", (error) => {
       setIsConnected(false);
       console.log("Connection error:", error.message);
-      // In development, we'll work with mock data if socket fails
+      // Show error toast to user
+      toast.error("Connection error. Attempting to reconnect...");
+    });
+
+    socketInstance.on("reconnect_attempt", (attemptNumber) => {
+      console.log(`Reconnection attempt: ${attemptNumber}`);
+    });
+
+    socketInstance.on("reconnect", (attemptNumber) => {
+      console.log(`Reconnected after ${attemptNumber} attempts`);
+      toast.success("Reconnected to the server");
+    });
+
+    socketInstance.on("reconnect_failed", () => {
+      console.log("Failed to reconnect");
+      toast.error("Failed to reconnect to the server. Please refresh the page.");
     });
 
     socketInstance.on(
@@ -170,32 +169,106 @@ export const SocketProvider: React.FC<SocketProviderProps> = ({ children }) => {
       (data: {
         userId: string;
         participants: Participant[];
-        activePoll: Poll | null;
+        activePoll: any | null;
         chatMessages: ChatMessage[];
+        roomId: string;
       }) => {
         setUserId(data.userId);
         setParticipants(data.participants);
-        setActivePoll(data.activePoll);
-        setChatMessages(data.chatMessages);
+        
+        // Process activePoll if it exists
         if (data.activePoll) {
+          const processedPoll = {
+            ...data.activePoll,
+            createdAt: typeof data.activePoll.createdAt === 'string' 
+              ? data.activePoll.createdAt 
+              : new Date(data.activePoll.createdAt).toISOString(),
+            endTime: data.activePoll.endTime 
+              ? (typeof data.activePoll.endTime === 'string' 
+                  ? data.activePoll.endTime 
+                  : new Date(data.activePoll.endTime).toISOString())
+              : undefined,
+          };
+          setActivePoll(processedPoll);
           setResults(data.activePoll.results);
+        } else {
+          setActivePoll(null);
+          setResults({});
         }
+        
+        // Process chat messages timestamps if needed
+        const processedMessages = data.chatMessages.map(msg => ({
+          ...msg,
+          timestamp: typeof msg.timestamp === 'string' ? msg.timestamp : new Date(msg.timestamp).toISOString()
+        }));
+        setChatMessages(processedMessages);
+        setRoomId(data.roomId);
       },
     );
 
     socketInstance.on(
       "participantUpdate",
-      (data: { participants: Participant[] }) => {
-        setParticipants(data.participants);
+      (data: { 
+        participants: Participant[];
+        roomId: string;
+        message?: string;
+      }) => {
+        // Only update if the participants are from the current room
+        if (data.roomId === roomId) {
+          setParticipants(data.participants);
+          if (data.message) {
+            toast.info(data.message);
+          }
+        }
       },
     );
 
+    socketInstance.on("chatMessage", (message: ChatMessage) => {
+      // Only add message if it's for the current room
+      if (message.roomId === roomId) {
+        setChatMessages((prev) => {
+          // Check if message already exists to prevent duplicates
+          if (!prev.some(m => m.id === message.id)) {
+            return [...prev, message];
+          }
+          return prev;
+        });
+        
+        // Show notification for new messages not from current user
+        if (message.senderId !== userId) {
+          const isTeacherMessage = message.isTeacher;
+          toast.message(message.text, {
+            description: `From: ${message.senderName}${isTeacherMessage ? ' (Teacher)' : ''}`,
+            duration: 3000,
+            position: 'bottom-right',
+            className: 'bg-gray-800 text-white',
+          });
+        }
+      }
+    });
+
+    socketInstance.on("teacherLeft", () => {
+      toast.error("The teacher has ended the session");
+      // Redirect to home after a delay
+      setTimeout(() => {
+        window.location.href = "/";
+      }, 3000);
+    });
+
     socketInstance.on(
       "newPoll",
-      (data: { poll: Poll; participants: Participant[] }) => {
-        setActivePoll(data.poll);
-        setParticipants(data.participants);
-        setResults(data.poll.results);
+      (data: { 
+        poll: Poll; 
+        participants: Participant[];
+        roomId: string;
+      }) => {
+        // Only update if the poll is for the current room
+        if (data.roomId === roomId) {
+          setActivePoll(data.poll);
+          setParticipants(data.participants);
+          setResults({});
+          toast.success("New poll started!");
+        }
       },
     );
 
@@ -222,12 +295,14 @@ export const SocketProvider: React.FC<SocketProviderProps> = ({ children }) => {
       },
     );
 
-    socketInstance.on("chatMessage", (message: ChatMessage) => {
-      setChatMessages((prev) => [...prev, message]);
-    });
-
-    socketInstance.on("pollHistory", (history: Poll[]) => {
-      setPollHistory(history);
+    socketInstance.on("pollHistory", (history: any[]) => {
+      // Process each poll in history to ensure proper date formats
+      const processedHistory = history.map(poll => ({
+        ...poll,
+        createdAt: typeof poll.createdAt === 'string' ? poll.createdAt : new Date(poll.createdAt).toISOString(),
+        endTime: poll.endTime ? (typeof poll.endTime === 'string' ? poll.endTime : new Date(poll.endTime).toISOString()) : undefined,
+      }));
+      setPollHistory(processedHistory);
     });
 
     socketInstance.on("kicked", () => {
@@ -243,12 +318,24 @@ export const SocketProvider: React.FC<SocketProviderProps> = ({ children }) => {
     };
   }, []);
 
-  const joinRoom = (name: string, type: "teacher" | "student") => {
-    if (socket) {
-      setUserName(name);
-      setUserType(type);
-      socket.emit("joinRoom", { userName: name, userType: type });
-    }
+  const joinRoom = (userName: string, userType: "teacher" | "student", roomId: string) => {
+    if (!socket) return;
+
+    const userData = {
+      userName,
+      userType,
+      roomId: roomId.toLowerCase().trim(),
+    };
+
+    socket.emit("joinRoom", userData);
+    setUserName(userName);
+    setUserType(userType);
+    setRoomId(userData.roomId);
+    
+    // Store user data in session storage for reconnection
+    sessionStorage.setItem('userName', userName);
+    sessionStorage.setItem('userType', userType);
+    sessionStorage.setItem('roomId', userData.roomId);
   };
 
   const createPoll = (pollData: {
@@ -256,8 +343,8 @@ export const SocketProvider: React.FC<SocketProviderProps> = ({ children }) => {
     options: Array<{ id: string; text: string; isCorrect: boolean }>;
     duration: number;
   }) => {
-    if (socket) {
-      socket.emit("createPoll", pollData);
+    if (socket && roomId) {
+      socket.emit("createPoll", { ...pollData, roomId });
     }
   };
 
@@ -268,12 +355,13 @@ export const SocketProvider: React.FC<SocketProviderProps> = ({ children }) => {
   };
 
   const sendMessage = (text: string) => {
-    if (socket && userId && userName && userType) {
+    if (socket && userId && userName && userType && roomId) {
       socket.emit("sendMessage", {
         text,
         senderId: userId,
         senderName: userName,
         isTeacher: userType === "teacher",
+        roomId,
       });
     }
   };
@@ -296,27 +384,32 @@ export const SocketProvider: React.FC<SocketProviderProps> = ({ children }) => {
     }
   };
 
-  const value: SocketContextType = {
-    socket,
-    isConnected,
-    userId,
-    userName,
-    userType,
-    participants,
-    activePoll,
-    chatMessages,
-    pollHistory,
-    results,
-    joinRoom,
-    createPoll,
-    submitAnswer,
-    sendMessage,
-    kickStudent,
-    getPollHistory,
-    disconnect,
-  };
-
   return (
-    <SocketContext.Provider value={value}>{children}</SocketContext.Provider>
+    <SocketContext.Provider
+      value={{
+        socket,
+        isConnected,
+        userId,
+        userName,
+        userType,
+        roomId,
+        participants,
+        activePoll,
+        chatMessages,
+        pollHistory,
+        results,
+        joinRoom,
+        createPoll,
+        submitAnswer,
+        sendMessage,
+        kickStudent,
+        getPollHistory,
+        disconnect,
+      }}
+    >
+      {children}
+    </SocketContext.Provider>
   );
 };
+
+export default SocketProvider;
