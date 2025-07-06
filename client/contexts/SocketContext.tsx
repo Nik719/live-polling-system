@@ -83,18 +83,69 @@ export const SocketProvider: React.FC<SocketProviderProps> = ({ children }) => {
   const [results, setResults] = useState<Record<string, number>>({});
 
   useEffect(() => {
-    // Initialize socket connection
-    const socketInstance = io(
-      process.env.NODE_ENV === "production"
-        ? window.location.origin
-        : "http://localhost:8080",
-      {
-        transports: ["polling", "websocket"],
-        upgrade: true,
-        autoConnect: true,
-        timeout: 20000,
-      },
-    );
+    // Initialize socket connection with Vercel-specific configuration
+    const socketInstance = io({
+      path: "/socket.io/",
+      transports: ["websocket", "polling"],
+      upgrade: true,
+      autoConnect: true,
+      withCredentials: true,
+      reconnection: true,
+      reconnectionAttempts: 10,
+      reconnectionDelay: 1000,
+      reconnectionDelayMax: 10000,
+      timeout: 20000,
+      // Vercel-specific configuration
+      ...(process.env.NODE_ENV === 'production' ? {
+        hostname: window.location.hostname,
+        secure: true,
+        port: '',
+        rejectUnauthorized: false,
+        // Force WebSocket transport in production
+        transports: ['websocket'],
+        // Enable multiplexing
+        forceNew: true,
+        // Add query parameters for debugging
+        query: {
+          v: '1.0',
+          t: Date.now()
+        }
+      } : {
+        // Development configuration
+        hostname: 'localhost',
+        port: '8080',
+        secure: false
+      })
+    });
+    
+    // Log connection status
+    const handleConnect = () => {
+      console.log('WebSocket connected:', socketInstance.id);
+      setIsConnected(true);
+    };
+    
+    const handleDisconnect = () => {
+      console.log('WebSocket disconnected');
+      setIsConnected(false);
+    };
+    
+    const handleConnectError = (error: Error) => {
+      console.error('WebSocket connection error:', error);
+      setIsConnected(false);
+    };
+    
+    // Set up event listeners
+    socketInstance.on('connect', handleConnect);
+    socketInstance.on('disconnect', handleDisconnect);
+    socketInstance.on('connect_error', handleConnectError);
+    
+    // Clean up event listeners on unmount
+    return () => {
+      socketInstance.off('connect', handleConnect);
+      socketInstance.off('disconnect', handleDisconnect);
+      socketInstance.off('connect_error', handleConnectError);
+      socketInstance.disconnect();
+    };
 
     setSocket(socketInstance);
 

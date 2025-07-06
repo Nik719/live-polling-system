@@ -165,65 +165,68 @@ class PollManager {
 }
 
 export function initializeSocket(io: SocketIOServer) {
+  // Initialize polling system
   const pollManager = new PollManager();
 
   io.on("connection", (socket) => {
-    console.log(`User connected: ${socket.id}`);
+    console.log("New client connected:", socket.id);
 
-    // User joins the system
-    socket.on(
-      "joinRoom",
-      (userData: { userName: string; userType: "teacher" | "student" }) => {
-        const participant: Participant = {
-          id: uuidv4(),
-          userName: userData.userName,
-          userType: userData.userType,
-          socketId: socket.id,
-          hasAnswered: false,
-        };
+    // Log connection details
+    console.log('Connection details:', {
+      id: socket.id,
+      handshake: socket.handshake,
+      connected: socket.connected,
+      disconnected: socket.disconnected,
+    });
 
-        pollManager.addParticipant(participant);
+    // Handle user joining
+    socket.on("joinRoom", (data: { userName: string; userType: "teacher" | "student" }) => {
+      try {
+        const { userName, userType } = data;
+        console.log(`User joining: ${userName} (${userType})`);
+        
+        const user = { id: socket.id, userName, userType };
+        
+        // Add user to the room
         socket.join("pollRoom");
-
-        // Send current state to the new user
-        socket.emit("userJoined", {
-          userId: participant.id,
-          participants: pollManager.getParticipants(),
-          activePoll: pollManager.getActivePoll(),
-          chatMessages: pollManager.getChatMessages(),
-        });
-
-        // Notify others
-        socket.to("pollRoom").emit("participantUpdate", {
-          participants: pollManager.getParticipants(),
-        });
-
-        console.log(`${userData.userType} ${userData.userName} joined`);
-      },
-    );
-
-    // Teacher creates a new poll
-    socket.on(
-      "createPoll",
-      (pollData: {
-        question: string;
-        options: Array<{ id: string; text: string; isCorrect: boolean }>;
-        duration: number;
-      }) => {
-        if (!pollManager.canCreateNewPoll()) {
-          socket.emit("error", {
-            message: "Cannot create poll while students are still answering",
-          });
-          return;
+        
+        // Add user to the participants list
+        pollManager.addParticipant(user);
+        
+        // Send updated participants list to all clients
+        io.to("pollRoom").emit("participantUpdate", pollManager.getParticipants());
+        
+        // Send current poll if any
+        const currentPoll = pollManager.getActivePoll();
+        if (currentPoll) {
+          socket.emit("newPoll", currentPoll);
         }
-
-        const poll = pollManager.createPoll(pollData);
-
-        // Notify all users about the new poll
-        io.to("pollRoom").emit("newPoll", {
-          poll,
-          participants: pollManager.getParticipants(),
+        
+        // Send chat history
+        socket.emit("chatHistory", pollManager.getChatMessages());
+        
+        // Send welcome message
+        socket.emit("systemMessage", {
+          text: `Welcome to the live polling system, ${userName}!`,
+          timestamp: new Date().toISOString(),
         });
+        
+      } catch (error) {
+        console.error('Error in join handler:', error);
+        socket.emit('error', { message: 'Failed to join the session' });
+      }
+    });
+
+    // Handle poll creation
+    socket.on("createPoll", (data: {
+      question: string;
+      options: Array<{ id: string; text: string; isCorrect: boolean }>;
+      duration: number;
+    }) => {
+      try {
+        console.log('Creating new poll:', data.question);
+        const poll = pollManager.createPoll(data);
+        io.to("pollRoom").emit("newPoll", poll);
 
         // Auto-end poll after duration
         setTimeout(() => {

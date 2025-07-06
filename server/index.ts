@@ -9,34 +9,66 @@ export function createApp() {
   const app = express();
   const httpServer = createServer(app);
 
-  // Initialize Socket.IO with CORS for Vercel
-  const io = new SocketIOServer(httpServer, {
-    cors: {
-      origin:
-        process.env.NODE_ENV === "production"
-          ? ["https://*.vercel.app", "https://localhost:3000"]
-          : ["http://localhost:8080", "http://localhost:3000"],
-      methods: ["GET", "POST"],
-      credentials: true,
+  // CORS configuration
+  const corsOptions = {
+    origin: (origin: string | undefined, callback: (err: Error | null, allow?: boolean) => void) => {
+      const allowedOrigins = [
+        'https://live-polling-system.vercel.app',
+        'https://live-polling-system-*.vercel.app',
+        'http://localhost:8080',
+        'http://localhost:3000',
+        'http://localhost:3001'
+      ];
+      
+      if (!origin || allowedOrigins.some(allowed => 
+        origin === allowed || 
+        origin.endsWith('.vercel.app') ||
+        (process.env.NODE_ENV !== 'production' && origin.startsWith('http://localhost'))
+      )) {
+        callback(null, true);
+      } else {
+        console.log('Blocked CORS for origin:', origin);
+        callback(new Error('Not allowed by CORS'));
+      }
     },
-    transports: ["polling", "websocket"],
+    methods: ['GET', 'POST', 'OPTIONS'],
+    allowedHeaders: ['Content-Type', 'Authorization'],
+    credentials: true
+  };
+
+  // Initialize Socket.IO with CORS
+  const io = new SocketIOServer(httpServer, {
+    cors: corsOptions,
+    transports: ['websocket', 'polling'],
+    allowEIO3: true,
+    pingTimeout: 60000,
+    pingInterval: 25000,
+    cookie: false
+  });
+  
+  // Handle WebSocket connection errors
+  io.engine.on('connection_error', (err) => {
+    console.error('WebSocket connection error:', err);
   });
 
   // Initialize polling system
   const pollManager = initializeSocket(io);
 
-  // Middleware
-  app.use(
-    cors({
-      origin:
-        process.env.NODE_ENV === "production"
-          ? ["https://*.vercel.app", "https://localhost:3000"]
-          : ["http://localhost:8080", "http://localhost:3000"],
-      credentials: true,
-    }),
-  );
+  // Apply CORS middleware for HTTP requests
+  app.use(cors(corsOptions));
+  
+  // Handle preflight requests
+  app.options('*', cors(corsOptions));
+  
+  // Body parsing middleware
   app.use(express.json());
   app.use(express.urlencoded({ extended: true }));
+  
+  // Log all incoming requests
+  app.use((req, res, next) => {
+    console.log(`[${new Date().toISOString()}] ${req.method} ${req.path}`);
+    next();
+  });
 
   // API Routes
   app.get("/api/ping", (_req, res) => {
